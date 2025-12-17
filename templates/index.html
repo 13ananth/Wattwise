@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WattWise – Smart Energy</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .mic-active { animation: pulse-red 1.5s infinite; }
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="max-w-2xl w-full bg-white rounded-[2rem] shadow-2xl p-6 md:p-10 border border-white">
+        
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-black text-blue-600 tracking-tight flex items-center justify-center gap-2">
+                <span class="bg-blue-600 text-white p-2 rounded-lg text-2xl">⚡</span> WattWise
+            </h1>
+            <p class="text-slate-400 mt-2 font-bold text-xs uppercase tracking-widest">AI Power Management</p>
+        </header>
+
+        <div class="bg-slate-50 p-4 rounded-3xl mb-8 border border-slate-200">
+            <canvas id="energyChart" height="200"></canvas>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+            <button id="micBtn" onclick="toggleVoice()" 
+                class="flex items-center justify-center gap-3 px-6 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl shadow-lg transition-all active:scale-95">
+                <span id="micIcon" class="text-2xl">🎤</span>
+                <span id="micText">Activate Voice</span>
+            </button>
+
+            <button onclick="predict()" 
+                class="flex items-center justify-center gap-3 px-6 py-4 bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 font-bold rounded-2xl shadow-sm transition-all active:scale-95">
+                <span class="text-2xl">🔮</span>
+                <span>Get Prediction</span>
+            </button>
+        </div>
+
+        <div class="bg-indigo-900 rounded-2xl p-6 text-indigo-100 shadow-inner">
+            <p class="text-indigo-400 text-xs font-bold uppercase mb-2">System Response</p>
+            <p id="result" class="text-lg font-medium leading-relaxed">Ready to assist. Click the mic to start talking...</p>
+        </div>
+    </div>
+
+    <script>
+        // 1. DATA AND CHART INITIALIZATION
+        const energyData = {{ data | tojson }};
+
+        const ctx = document.getElementById('energyChart').getContext('2d');
+        const energyChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [...Array(24).keys()].map(i => i + ":00"),
+                datasets: [{
+                    label: 'Usage (kWh)',
+                    data: energyData,
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    borderWidth: 4,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 2,
+                    pointBackgroundColor: '#2563eb'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { 
+                    y: { beginAtZero: true, grid: { color: '#e2e8f0' } }, 
+                    x: { grid: { display: false } } 
+                }
+            }
+        });
+
+        // 2. SPEECH RECOGNITION SETUP
+        let isListening = false;
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        // Check if speech recognition is available
+        if (!SpeechRecognition) {
+            document.getElementById('micBtn').disabled = true;
+            document.getElementById('result').innerText = "Speech recognition not supported in your browser.";
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = "en-IN";
+        recognition.continuous = false;
+
+        function toggleVoice() {
+            if (isListening) {
+                isListening = false;
+                recognition.stop();
+                updateMicUI(false);
+            } else {
+                isListening = true;
+                recognition.start();
+                updateMicUI(true);
+            }
+        }
+
+        function updateMicUI(active) {
+            const btn = document.getElementById('micBtn');
+            const text = document.getElementById('micText');
+            if (active) {
+                btn.classList.add('mic-active', 'bg-red-500');
+                btn.classList.remove('bg-blue-600');
+                text.innerText = "Listening...";
+            } else {
+                btn.classList.remove('mic-active', 'bg-red-500');
+                btn.classList.add('bg-blue-600');
+                text.innerText = "Activate Voice";
+            }
+        }
+
+        // Restart loop for continuous listening
+        recognition.onend = () => {
+            if (isListening) {
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.log("Recognition already started");
+                }
+            }
+        };
+
+        recognition.onresult = (event) => {
+            try {
+                const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
+                
+                const validCommands = ["usage", "predict", "save", "future", "hello", "hi", "current", "tips", "cost", "bill"];
+                const isACommand = validCommands.some(cmd => transcript.includes(cmd));
+
+                if (isACommand) {
+                    document.getElementById('result').innerText = "Analyzing: " + transcript;
+                    
+                    fetch('/voice-command', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: transcript })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        document.getElementById('result').innerText = data.response;
+                        speak(data.response);
+                    })
+                    .catch(err => {
+                        console.error("Error:", err);
+                        document.getElementById('result').innerText = "Error connecting to backend. Make sure Flask is running.";
+                    });
+                } else {
+                    console.log("Ignored noise: " + transcript);
+                }
+            } catch (e) {
+                console.error("Error in speech recognition:", e);
+            }
+        };
+
+        recognition.onerror = (event) => {
+            console.error("Speech recognition error:", event.error);
+            document.getElementById('result').innerText = "Mic error. Try again.";
+            updateMicUI(false);
+        };
+
+        // 3. PREDICTION FUNCTION
+        function predict() {
+            fetch('/predict')
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById('result').innerText = "Error: " + data.error;
+                } else {
+                    const msg = "Prediction: " + data.prediction + " units next hour.";
+                    document.getElementById('result').innerText = msg;
+                    speak(msg);
+                }
+            })
+            .catch(err => {
+                document.getElementById('result').innerText = "Error connecting to server. Make sure Flask is running.";
+            });
+        }
+
+        // 4. TEXT TO SPEECH
+        function speak(text) {
+            try {
+                if ('speechSynthesis' in window) {
+                    const msg = new SpeechSynthesisUtterance(text);
+                    msg.lang = "en-IN";
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(msg);
+                }
+            } catch (e) {
+                console.log("Text-to-speech not available:", e);
+            }
+        }
+    </script>
+</body>
+</html>
